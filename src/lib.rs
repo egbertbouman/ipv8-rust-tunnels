@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use crypto::{Direction, SessionKeys};
-use pyo3::exceptions::PyException;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::types::{PyDict, PyList, PySet};
 use pyo3::{create_exception, IntoPyObjectExt};
 use pyo3::{
@@ -27,6 +27,8 @@ use crate::socks5::Socks5Server;
 use crate::task_manager::TaskManager;
 
 mod crypto;
+mod dh;
+mod keys;
 mod packet;
 mod payload;
 mod request_cache;
@@ -41,9 +43,10 @@ mod util;
 #[macro_use]
 extern crate log;
 
-create_exception!(ipv8_rust_tunnels, RustError, PyException);
+create_exception!(_rust, EndpointNotOpenError, PyException);
+create_exception!(_rust, InvalidAddressError, PyValueError);
 
-#[pyclass]
+#[pyclass(name = "_Endpoint")]
 pub struct Endpoint {
     addr: String,
     rt: Option<RoutingTable>,
@@ -594,18 +597,32 @@ impl Endpoint {
     fn get_routing_table(&self) -> Result<&RoutingTable, PyErr> {
         match &self.rt {
             Some(rt) => Ok(rt),
-            None => Err(RustError::new_err("Endpoint is not open")),
+            None => Err(EndpointNotOpenError::new_err("Endpoint is not open")),
         }
     }
 }
 
 #[pymodule]
-#[pyo3(name = "rust_endpoint")]
-pub fn ipv8_rust_tunnels(py: Python, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    env_logger::init();
-    module.add("RustError", py.get_type::<RustError>())?;
-    module.add_class::<Endpoint>()?;
-    module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+pub fn _rust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let _ = env_logger::try_init();
+
+    m.add_class::<Endpoint>()?;
+    m.add("EndpointNotOpenError", py.get_type::<EndpointNotOpenError>())?;
+    m.add("InvalidAddressError", py.get_type::<InvalidAddressError>())?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+
+    m.add_class::<keys::PublicKey>()?;
+    m.add_class::<keys::PrivateKey>()?;
+    m.add_function(wrap_pyfunction!(keys::generate_safe_prime, m)?)?;
+    m.add_function(wrap_pyfunction!(keys::generate_rsa_prime, m)?)?;
+    m.add_function(wrap_pyfunction!(keys::is_prime, m)?)?;
+
+    m.add_class::<dh::SessionKeys>()?;
+    m.add_function(wrap_pyfunction!(dh::generate_session_keys, m)?)?;
+    m.add_function(wrap_pyfunction!(dh::crypto_auth, m)?)?;
+    m.add_function(wrap_pyfunction!(dh::crypto_auth_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(dh::crypto_box_beforenm, m)?)?;
+
     Ok(())
 }
 
@@ -697,6 +714,6 @@ fn parse_address(address: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
     let port = address.get_item(1)?.extract::<u16>()?;
     match ip.parse::<IpAddr>() {
         Ok(addr) => Ok(SocketAddr::new(addr, port)),
-        _ => Err(RustError::new_err("Invalid address")),
+        Err(e) => Err(InvalidAddressError::new_err(e.to_string())),
     }
 }
