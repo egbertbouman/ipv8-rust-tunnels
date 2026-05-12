@@ -4,7 +4,8 @@ use openssl::md::Md;
 use openssl::pkey::{Id, PKey};
 use openssl::pkey_ctx::{HkdfMode, PkeyCtx};
 use openssl::sign::Signer;
-use pyo3::exceptions::PyValueError;
+use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::keys::{PrivateKey, PublicKey};
@@ -178,9 +179,62 @@ pub struct SessionKeys {
     #[pyo3(get, set)]
     pub salt_backward: Vec<u8>,
     #[pyo3(get, set)]
-    pub salt_explicit_forward: u32,
+    pub salt_explicit_forward: u64,
     #[pyo3(get, set)]
-    pub salt_explicit_backward: u32,
+    pub salt_explicit_backward: u64,
+}
+
+#[pymethods]
+impl SessionKeys {
+    pub fn encrypt_str(&mut self, content: &[u8], direction: i32) -> PyResult<Vec<u8>> {
+        let (key, salt, counter) = if direction == 0 {
+            self.salt_explicit_forward += 1;
+            (&self.key_forward, &self.salt_forward, self.salt_explicit_forward)
+        } else {
+            self.salt_explicit_backward += 1;
+            (&self.key_backward, &self.salt_backward, self.salt_explicit_backward)
+        };
+
+        let counter_bytes = (counter as u64).to_be_bytes();
+
+        let mut nonce = Vec::with_capacity(12);
+        nonce.extend_from_slice(salt);
+        nonce.extend_from_slice(&counter_bytes);
+
+        let mut tag = [0u8; 16];
+        let ciphertext =
+            encrypt_aead(Cipher::chacha20_poly1305(), key, Some(&nonce), &[], content, &mut tag)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        // Format: 8 byte counter + ciphertext + 16 byte tag
+        let mut out = Vec::with_capacity(8 + ciphertext.len() + 16);
+        out.extend_from_slice(&counter_bytes);
+        out.extend_from_slice(&ciphertext);
+        out.extend_from_slice(&tag);
+        Ok(out)
+    }
+
+    pub fn decrypt_str(&self, content: &[u8], direction: i32) -> PyResult<Vec<u8>> {
+        if content.len() < 24 {
+            return Err(PyValueError::new_err("Content too short"));
+        }
+
+        let (key, salt) = if direction == 0 {
+            (&self.key_forward, &self.salt_forward)
+        } else {
+            (&self.key_backward, &self.salt_backward)
+        };
+
+        let (counter_bytes, rest) = content.split_at(8);
+        let (ciphertext, tag) = rest.split_at(rest.len() - 16);
+
+        let mut nonce = Vec::with_capacity(12);
+        nonce.extend_from_slice(salt);
+        nonce.extend_from_slice(counter_bytes);
+
+        decrypt_aead(Cipher::chacha20_poly1305(), key, Some(&nonce), &[], ciphertext, tag)
+            .map_err(|_| PyRuntimeError::new_err("Decryption failed"))
+    }
 }
 
 #[pyfunction]

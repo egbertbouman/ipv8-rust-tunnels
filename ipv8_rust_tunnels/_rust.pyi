@@ -71,6 +71,13 @@ class SessionKeys:
     salt_explicit_forward: int
     salt_explicit_backward: int
 
+    def encrypt_str(self, content: bytes, direction: int) -> bytes:
+        """Encrypt using ChaCha20-Poly1305 (returns salt_explicit + ciphertext + tag)."""
+        ...
+    def decrypt_str(self, content: bytes, direction: int) -> bytes:
+        """Decrypt using ChaCha20-Poly1305 (expects salt_explicit + ciphertext + tag)."""
+        ...
+
 class _Endpoint:
     """
     High-performance Rust UDP endpoint with SOCKS5 support.

@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import Mock
 
-from ipv8_rust_tunnels.endpoint import RustEndpoint
+from ipv8_rust_tunnels import Endpoint as RustEndpoint
 
 from ipv8.messaging.anonymization.community import CIRCUIT_TYPE_RP_DOWNLOADER
 from ipv8.messaging.anonymization.tunnel import PEER_FLAG_SPEED_TEST
